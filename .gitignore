@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+# And for this binary in particular.
+dreamrug-audio
 
 # Test binary, built with `go test -c`
 *.test

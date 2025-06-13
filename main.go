@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 
@@ -19,5 +21,17 @@ func main() {
 }
 
 func doMain(ctx context.Context, input io.Reader) error {
+	scanner := bufio.NewScanner(input)
+
+	for scanner.Scan() {
+		txt := scanner.Text()
+
+		log.V(5).InfoContextf(ctx, "got content: %s", txt)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("got error from scanner: %w", err)
+	}
+
 	return nil
 }
