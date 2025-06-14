@@ -23,6 +23,7 @@ import (
 
 // Flags.
 var (
+	dataBufferSize  = flag.Int("data_buffer_size", 64, "The size of the data buffer.")
 	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer.")
 )
 
@@ -41,7 +42,7 @@ func main() {
 	}()
 
 	log.Info("starting up an reading from stdin")
-	if err := doMain(ctx, os.Stdin, *audioBufferSize); err != nil {
+	if err := doMain(ctx, os.Stdin, *dataBufferSize, *audioBufferSize); err != nil {
 		log.Exitf("failed to run: %v", err)
 	}
 }
@@ -52,28 +53,35 @@ type sensorPayload struct {
 	UptimeMillis  int64 `json:"upt"`
 }
 
-const DATA_BUFFER_SIZE = 8 // originally 32
-
 type dataBuffer struct {
-	data [DATA_BUFFER_SIZE]int
+	data []int
 	head int
+	size int
 }
 
-func newDataBuffer() *dataBuffer {
-	return &dataBuffer{}
+func newDataBuffer(size int) *dataBuffer {
+	return &dataBuffer{
+		data: make([]int, size),
+		head: 0,
+		size: size,
+	}
 }
 
 func (db *dataBuffer) insert(val int) {
 	db.data[db.head] = val
-	db.head = (db.head + 1) % DATA_BUFFER_SIZE
+	db.head = (db.head + 1) % db.size
 }
 
 func (db *dataBuffer) get(index int) int {
-	i := (index + db.head) % DATA_BUFFER_SIZE
+	i := (index + db.head) % db.size
 	return db.data[i]
 }
 
 func (db *dataBuffer) average(bias int) (float64, error) {
+	if db.size < 1 {
+		return 0, fmt.Errorf("buffer has bad size < 1: %d", db.size)
+	}
+
 	if bias > 100 {
 		return 0, fmt.Errorf("bias can only be (-inf, 100], got %d", bias)
 	}
@@ -83,19 +91,19 @@ func (db *dataBuffer) average(bias int) (float64, error) {
 	}
 
 	var sum int64
-	for i := range DATA_BUFFER_SIZE {
+	for i := range db.size {
 		sum += int64(db.get(i))
 	}
 
-	avg := float64(sum) / DATA_BUFFER_SIZE
+	avg := float64(sum) / float64(db.size)
 
 	return avg, nil
 }
 
-func doMain(ctx context.Context, input io.Reader, audioBufferSize int) error {
+func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBufferSize int) error {
 	scanner := bufio.NewScanner(input)
 
-	db := newDataBuffer()
+	db := newDataBuffer(dataBufferSize)
 
 	buf := &audio.FloatBuffer{
 		Data:   make([]float64, audioBufferSize),
@@ -157,6 +165,7 @@ func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, fsrPe
 	pct := int(math.Round(avg * 100.0 / MAX_FSR_READING))
 
 	fsrPercentage <- pct
+	log.V(1).InfoContextf(ctx, "reading percentage: %02d / 100", pct)
 
 	return nil
 }
@@ -211,7 +220,7 @@ func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, a
 		*/
 
 		currentVol = 6.0 * gainControl
-		log.V(1).InfoContextf(ctx, "current volume at %f", currentVol)
+		log.V(2).InfoContextf(ctx, "current volume at %f", currentVol)
 
 		transforms.Gain(buf, currentVol)
 
