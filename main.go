@@ -23,8 +23,8 @@ import (
 
 // Flags.
 var (
-	dataBufferSize  = flag.Int("data_buffer_size", 64, "The size of the data buffer.")
-	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer.")
+	dataBufferSize  = flag.Int("data_buffer_size", 1, "The size of the data buffer, for gradual input delay.")
+	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
 )
 
 func main() {
@@ -47,10 +47,14 @@ func main() {
 	}
 }
 
+type sensorReading struct {
+	Name  string `json:"name"`
+	Value int32  `json:"value"`
+}
+
 type sensorPayload struct {
-	FSRReading    int32 `json:"fsr"`
-	LEDBrightness int32 `json:"led"`
-	UptimeMillis  int64 `json:"upt"`
+	UptimeMillis int64            `json:"upt"`
+	SensorData   []*sensorReading `json:"sensorData"`
 }
 
 type dataBuffer struct {
@@ -151,16 +155,17 @@ const WIDTH = 120
 func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, fsrPercentage chan<- int) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
 	log.V(2).InfoContextf(ctx, "got payload at uptime %s", uptime)
-	var mapped int = WIDTH * int(pld.FSRReading) / MAX_FSR_READING
-	log.V(5).InfoContextf(ctx, "mapped fsr reading %d to %d", pld.FSRReading, mapped)
+	var lastSensor = pld.SensorData[len(pld.SensorData)-1]
+	var mapped int = WIDTH * int(lastSensor.Value) / MAX_FSR_READING
+	log.V(5).InfoContextf(ctx, "mapped fsr reading %d to %d", lastSensor.Value, mapped)
 	log.V(2).InfoContextf(ctx, strings.Repeat("#", mapped))
 
-	db.insert(int(pld.FSRReading))
+	db.insert(int(lastSensor.Value))
 	avg, err := db.average(0)
 	if err != nil {
 		return fmt.Errorf("failed to get average for data buffer: %w", err)
 	}
-	log.V(2).InfoContextf(ctx, "got value: %d\trunning average:\t%f\n", pld.FSRReading, avg)
+	log.V(2).InfoContextf(ctx, "got value: %d\trunning average:\t%f\n", lastSensor.Value, avg)
 
 	pct := int(math.Round(avg * 100.0 / MAX_FSR_READING))
 
@@ -172,7 +177,7 @@ func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, fsrPe
 
 func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, audioBufferSize int, fsrPercentage <-chan int, sig chan os.Signal) {
 	gainControl := 0.0
-	currentVol := osc.Amplitude
+	var currentVol float64
 
 	out := make([]float32, audioBufferSize)
 	stream, err := portaudio.OpenDefaultStream(0, 1, 44100, len(out), &out)
