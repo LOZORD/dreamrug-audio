@@ -104,6 +104,13 @@ func (db *dataBuffer) average(bias int) (float64, error) {
 	return avg, nil
 }
 
+// frequencyMap is a mapping of sesor input names to their corresponding frequencies (in Hz).
+var frequencyMap = map[string]float64{
+	"input_1001": 261.63,
+	"input_1002": 329.63,
+	"input_1003": 392.00,
+}
+
 func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBufferSize int) error {
 	scanner := bufio.NewScanner(input)
 
@@ -113,9 +120,14 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 		Data:   make([]float64, audioBufferSize),
 		Format: audio.FormatMono44100,
 	}
+
+	var oscs []*generator.Osc
+
 	currentNote := 440.0
 	osc := generator.NewOsc(generator.WaveSine, currentNote, buf.Format.SampleRate)
 	osc.Amplitude = 1
+
+	oscs = append(oscs, osc)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -144,7 +156,7 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 		// }
 	}()
 
-	runAudio(ctx, osc, buf, audioBufferSize, fsrPercentage, sig)
+	runAudio(ctx, oscs, buf, audioBufferSize, fsrPercentage, sig)
 
 	return nil
 }
@@ -175,7 +187,7 @@ func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, fsrPe
 	return nil
 }
 
-func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, audioBufferSize int, fsrPercentage <-chan int, sig chan os.Signal) {
+func runAudio(ctx context.Context, oscs []*generator.Osc, buf *audio.FloatBuffer, audioBufferSize int, fsrPercentage <-chan int, sig chan os.Signal) {
 	gainControl := 0.0
 	var currentVol float64
 
@@ -205,8 +217,10 @@ func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, a
 		}
 
 		// populate the out buffer
-		if err := osc.Fill(buf); err != nil {
-			log.V(5).Infoln("error filling up the buffer")
+		for _, o := range oscs {
+			if err := o.Fill(buf); err != nil {
+				log.V(5).Infoln("error filling up the buffer")
+			}
 		}
 		// apply vol control if needed (applied as a transform instead of a control
 		// on the osc)
