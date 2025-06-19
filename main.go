@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -65,53 +64,6 @@ func (pld *sensorPayload) getValue(sid string) (int32, bool) {
 	return 0, false
 }
 
-type dataBuffer struct {
-	data []int
-	head int
-	size int
-}
-
-func newDataBuffer(size int) *dataBuffer {
-	return &dataBuffer{
-		data: make([]int, size),
-		head: 0,
-		size: size,
-	}
-}
-
-func (db *dataBuffer) insert(val int) {
-	db.data[db.head] = val
-	db.head = (db.head + 1) % db.size
-}
-
-func (db *dataBuffer) get(index int) int {
-	i := (index + db.head) % db.size
-	return db.data[i]
-}
-
-func (db *dataBuffer) average(bias int) (float64, error) {
-	if db.size < 1 {
-		return 0, fmt.Errorf("buffer has bad size < 1: %d", db.size)
-	}
-
-	if bias > 100 {
-		return 0, fmt.Errorf("bias can only be (-inf, 100], got %d", bias)
-	}
-
-	if bias > 0 {
-		return 0, fmt.Errorf("bias is currently unsupported, got %d", bias)
-	}
-
-	var sum int64
-	for i := range db.size {
-		sum += int64(db.get(i))
-	}
-
-	avg := float64(sum) / float64(db.size)
-
-	return avg, nil
-}
-
 const defaultFreq = 440.0
 
 // frequencyMap is a mapping of sesor input names to their corresponding frequencies (in Hz).
@@ -124,7 +76,7 @@ var frequencyMap = map[string]float64{
 func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBufferSize int) error {
 	scanner := bufio.NewScanner(input)
 
-	db := newDataBuffer(dataBufferSize)
+	db := NewRingBuffer(dataBufferSize)
 
 	buf := &audio.FloatBuffer{
 		Data:   make([]float64, audioBufferSize),
@@ -169,7 +121,7 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 const MAX_FSR_READING = 1024 - 1
 const WIDTH = 120
 
-func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, payloads chan<- sensorPayload) error {
+func handlePayload(ctx context.Context, pld sensorPayload, db *RingBuffer, payloads chan<- sensorPayload) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
 	log.V(2).InfoContextf(ctx, "got payload at uptime %s", uptime)
 	var lastSensor = pld.SensorData[len(pld.SensorData)-1]
