@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -57,6 +56,15 @@ type sensorPayload struct {
 	SensorData   []*sensorReading `json:"sensorData"`
 }
 
+func (pld *sensorPayload) getValue(sid string) (int32, bool) {
+	for _, s := range pld.SensorData {
+		if s.Name == sid {
+			return s.Value, true
+		}
+	}
+	return 0, false
+}
+
 type dataBuffer struct {
 	data []int
 	head int
@@ -104,6 +112,8 @@ func (db *dataBuffer) average(bias int) (float64, error) {
 	return avg, nil
 }
 
+const defaultFreq = 440.0
+
 // frequencyMap is a mapping of sesor input names to their corresponding frequencies (in Hz).
 var frequencyMap = map[string]float64{
 	"input_1001": 261.63,
@@ -121,18 +131,13 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 		Format: audio.FormatMono44100,
 	}
 
-	var oscs []*generator.Osc
-
-	currentNote := 440.0
-	osc := generator.NewOsc(generator.WaveSine, currentNote, buf.Format.SampleRate)
+	osc := generator.NewOsc(generator.WaveSine, defaultFreq, buf.Format.SampleRate)
 	osc.Amplitude = 1
-
-	oscs = append(oscs, osc)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
-	fsrPercentage := make(chan int)
+	payloads := make(chan sensorPayload)
 
 	go func() {
 		for scanner.Scan() {
@@ -146,7 +151,7 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 				continue
 			}
 
-			if err := handlePayload(ctx, pld, db, fsrPercentage); err != nil {
+			if err := handlePayload(ctx, pld, db, payloads); err != nil {
 				log.WarningContextf(ctx, "failed to handle payload: %v", err)
 				continue
 			}
@@ -156,7 +161,7 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 		// }
 	}()
 
-	runAudio(ctx, oscs, buf, audioBufferSize, fsrPercentage, sig)
+	runAudio(ctx, osc, buf, audioBufferSize, payloads, sig)
 
 	return nil
 }
@@ -164,7 +169,7 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 const MAX_FSR_READING = 1024 - 1
 const WIDTH = 120
 
-func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, fsrPercentage chan<- int) error {
+func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, payloads chan<- sensorPayload) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
 	log.V(2).InfoContextf(ctx, "got payload at uptime %s", uptime)
 	var lastSensor = pld.SensorData[len(pld.SensorData)-1]
@@ -172,24 +177,23 @@ func handlePayload(ctx context.Context, pld sensorPayload, db *dataBuffer, fsrPe
 	log.V(5).InfoContextf(ctx, "mapped fsr reading %d to %d", lastSensor.Value, mapped)
 	log.V(2).InfoContextf(ctx, strings.Repeat("#", mapped))
 
-	db.insert(int(lastSensor.Value))
-	avg, err := db.average(0)
-	if err != nil {
-		return fmt.Errorf("failed to get average for data buffer: %w", err)
-	}
-	log.V(2).InfoContextf(ctx, "got value: %d\trunning average:\t%f\n", lastSensor.Value, avg)
+	// TODO: use ring buffer for delay effect on changes for gradual smoothing.
+	// db.insert(int(lastSensor.Value))
+	// avg, err := db.average(0)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to get average for data buffer: %w", err)
+	// }
+	// log.V(2).InfoContextf(ctx, "got value: %d\trunning average:\t%f\n", lastSensor.Value, avg)
 
-	pct := int(math.Round(avg * 100.0 / MAX_FSR_READING))
+	// pct := int(math.Round(avg * 100.0 / MAX_FSR_READING))
 
-	fsrPercentage <- pct
-	log.V(1).InfoContextf(ctx, "reading percentage: %02d / 100", pct)
+	payloads <- pld
 
 	return nil
 }
 
-func runAudio(ctx context.Context, oscs []*generator.Osc, buf *audio.FloatBuffer, audioBufferSize int, fsrPercentage <-chan int, sig chan os.Signal) {
-	gainControl := 0.0
-	var currentVol float64
+func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, audioBufferSize int, payloads <-chan sensorPayload, sig chan os.Signal) {
+	var currentVol float64 = 1
 
 	out := make([]float32, audioBufferSize)
 	stream, err := portaudio.OpenDefaultStream(0, 1, 44100, len(out), &out)
@@ -203,12 +207,20 @@ func runAudio(ctx context.Context, oscs []*generator.Osc, buf *audio.FloatBuffer
 	}
 	defer stream.Stop()
 
+	var currentPayload sensorPayload
 	for {
 
+		// Clear the output buffer.
+		for i := range out {
+			out[i] = 0
+		}
+
 		select {
-		case pct := <-fsrPercentage:
-			gainControl = float64(pct) / 100.0
-			log.V(2).InfoContextf(ctx, "gain control: %f", gainControl)
+		case pld := <-payloads:
+			if len(currentPayload.SensorData) == 0 { // FIXME
+				log.V(2).Infoln("set current payload")
+				currentPayload = pld
+			}
 		case <-sig:
 			log.InfoContext(ctx, "stopping audio")
 			return
@@ -217,33 +229,36 @@ func runAudio(ctx context.Context, oscs []*generator.Osc, buf *audio.FloatBuffer
 		}
 
 		// populate the out buffer
-		for _, o := range oscs {
-			if err := o.Fill(buf); err != nil {
+		for sensorID, freq := range frequencyMap {
+			value, ok := currentPayload.getValue(sensorID)
+			if !ok {
+				log.WarningContextf(ctx, "no sensor value for ID %q", sensorID)
+				continue
+			}
+
+			osc.Reset()
+			osc.Freq = freq
+			osc.Amplitude = float64(value) / float64(MAX_FSR_READING)
+			if err := osc.Fill(buf); err != nil {
 				log.V(5).Infoln("error filling up the buffer")
 			}
-		}
-		// apply vol control if needed (applied as a transform instead of a control
-		// on the osc)
-		/*
-			if gainControl != 0 {
-				currentVol += gainControl
-				if currentVol < 0.1 {
-					currentVol = 0
-				}
-				if currentVol > 6 {
-					currentVol = 6
-				}
-				log.InfoContextf(ctx, "new vol %f.2", currentVol)
-				gainControl = 0
-			}
-		*/
 
-		currentVol = 6.0 * gainControl
+			// add that audio to the output buffer
+			cpy := buf.AsFloat32Buffer().Data
+			denom := float32(len(frequencyMap))
+			for i := range out {
+				// divide by the number of sines to avoid clipping
+				out[i] += cpy[i] / denom
+			}
+		}
+
+		currentVol = 3
 		log.V(2).InfoContextf(ctx, "current volume at %f", currentVol)
 
 		transforms.Gain(buf, currentVol)
 
-		f64ToF32Copy(out, buf.Data)
+		// f64ToF32Copy(out, buf.Data)
+		// out = buf.AsFloat32Buffer().Data
 
 		// write to the stream
 		if err := stream.Write(); err != nil {
