@@ -130,14 +130,6 @@ func handlePayload(ctx context.Context, pld sensorPayload, db *RingBuffer, paylo
 	log.V(2).InfoContextf(ctx, strings.Repeat("#", mapped))
 
 	// TODO: use ring buffer for delay effect on changes for gradual smoothing.
-	// db.insert(int(lastSensor.Value))
-	// avg, err := db.average(0)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to get average for data buffer: %w", err)
-	// }
-	// log.V(2).InfoContextf(ctx, "got value: %d\trunning average:\t%f\n", lastSensor.Value, avg)
-
-	// pct := int(math.Round(avg * 100.0 / MAX_FSR_READING))
 
 	payloads <- pld
 
@@ -216,13 +208,5 @@ func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, a
 		if err := stream.Write(); err != nil {
 			log.ErrorContextf(ctx, "error writing to stream : %v\n", err)
 		}
-	}
-}
-
-// portaudio doesn't support float64 so we need to copy our data over to the
-// destination buffer.
-func f64ToF32Copy(dst []float32, src []float64) {
-	for i := range src {
-		dst[i] = float32(src[i])
 	}
 }
