@@ -24,7 +24,7 @@ def main():
     input3 = calculate_input(now_ms, _INPUT3_PERIOD)
 
     pld = {
-       'utp': int(uptime),
+       'upt': int(uptime),
        'sensorData': [
           {'name': 'input_1001', 'value': input1},
           {'name': 'input_1002', 'value': input2},
