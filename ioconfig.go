@@ -16,7 +16,7 @@ type SensorToneConfig struct {
 	MainTone   float64 `toml:"main_tone"`
 }
 
-func ParseFromFile(file string) (*IOConfig, error) {
+func ParseIOConfigFromFile(file string) (*IOConfig, error) {
 	bs, err := os.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file at %q: %w", file, err)

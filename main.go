@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 var (
 	dataBufferSize  = flag.Int("data_buffer_size", 1, "The size of the data buffer, for gradual input delay.")
 	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
+	configFile      = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
 )
 
 func main() {
@@ -40,7 +42,7 @@ func main() {
 	}()
 
 	log.Info("starting up an reading from stdin")
-	if err := doMain(ctx, os.Stdin, *dataBufferSize, *audioBufferSize); err != nil {
+	if err := doMain(ctx, os.Stdin, *dataBufferSize, *audioBufferSize, *configFile); err != nil {
 		log.Exitf("failed to run: %v", err)
 	}
 }
@@ -73,10 +75,16 @@ var frequencyMap = map[string]float64{
 	"input_1003": 392.00,
 }
 
-func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBufferSize int) error {
+func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBufferSize int, configFile string) error {
 	scanner := bufio.NewScanner(input)
 
 	db := NewRingBuffer(dataBufferSize)
+
+	cfg, err := ParseIOConfigFromFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to parse config from %q: %w", configFile, err)
+	}
+	log.V(5).Info("got config for %d sensors", len(cfg.Sensors))
 
 	buf := &audio.FloatBuffer{
 		Data:   make([]float64, audioBufferSize),
