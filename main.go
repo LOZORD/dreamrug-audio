@@ -38,7 +38,7 @@ func main() {
 		}
 	}()
 
-	log.Info("starting up an reading from stdin")
+	log.Info("starting up and reading from stdin")
 	if err := doMain(ctx, os.Stdin, *audioBufferSize, *configFile, float32(*baseVolume)); err != nil {
 		log.Exitf("failed to run: %v", err)
 	}
@@ -75,7 +75,9 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 	// A map of input sensor names to sine waves.
 	var inputToSines map[string]*Sine = map[string]*Sine{}
 	for _, s := range cfg.Sensors {
-		log.InfoContextf(ctx, "got sensor config: %+v", s)
+		log.V(5).InfoContextf(ctx, "got sensor config: %+v", s)
+		// TODO: also set up some octaves.
+		// We will need to configure octave-specific relative volumes in order to produce the Shepherd tone effect.
 		inputToSines[s.SensorName] = NewSineWave(
 			s.MainTone,
 			DEFAULT_SAMPLE_RATE,
@@ -116,7 +118,6 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 }
 
 const MAX_FSR_READING = 1024 - 1
-const WIDTH = 120
 
 func handlePayload(ctx context.Context, pld sensorPayload, payloads chan<- sensorPayload) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
