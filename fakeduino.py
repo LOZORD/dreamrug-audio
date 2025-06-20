@@ -1,35 +1,35 @@
 #!/usr/bin/python3
-import time
-import math
+import argparse
 import json
+import math
 import sys
+import time
 
-_PERIOD = 1 / (10.0 * 1_000.0)
-_INPUT1_PERIOD = 1.0 / _PERIOD
-_INPUT2_PERIOD = 1.0 / (2.0 * _PERIOD)
-_INPUT3_PERIOD = 1.0 / (3.0 * _PERIOD)
+_PERIOD = (5.0 * 1_000.0) # 5 second period
 
 _MAX_VALUE = 1024 - 1
 
 
-def main():
+def main(args: any):
    start_time = current_millis()
+   num_inputs = int(args.sensor_count)
 
    while True:
     now_ms = current_millis()
     uptime = now_ms - start_time
 
-    input1 = calculate_input(now_ms, _INPUT1_PERIOD)
-    input2 = calculate_input(now_ms, _INPUT2_PERIOD)
-    input3 = calculate_input(now_ms, _INPUT3_PERIOD)
+    sensors = []
+    for i in range(num_inputs):
+       n = i + 1
+       period = 1_000 * n # n second period.
+       sensors.append({
+          'name': f'input_{1000 + n}',
+          'value': calculate_input(now_ms, period),
+       })
 
     pld = {
        'upt': int(uptime),
-       'sensorData': [
-          {'name': 'input_1001', 'value': input1},
-          {'name': 'input_1002', 'value': input2},
-          {'name': 'input_1003', 'value': input3},
-       ],
+       'sensorData': sensors,
     }
 
     js = json.dumps(pld)
@@ -44,4 +44,12 @@ def calculate_input(now: int, period: float) -> int:
    return int((math.cos(now / period) / 2 + 0.5) * _MAX_VALUE)
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+       prog='Fakeduino',
+       description='Fake implementation of the Dream Rug Arduino program. No sensors needed!',
+    )
+    parser.add_argument('--sensor_count',
+                         default=3, 
+                         help='The number of sensors to simulate.')
+    args = parser.parse_args()
+    main(args)
