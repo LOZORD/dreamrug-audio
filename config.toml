@@ -1,6 +1,11 @@
 # Sensors => tone configuration.
 
 [[sensors]]
-input_1001 = 261.63
-input_1002 = 329.63
-input_1003 = 392.00
+sensor_name = "input_1001"
+main_tone = 261.63
+[[sensors]]
+sensor_name = "input_1002"
+main_tone = 329.63
+[[sensors]]
+sensor_name = "input_1003"
+main_tone = 392.00

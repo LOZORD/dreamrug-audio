@@ -9,13 +9,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/go-audio/audio"
-	"github.com/go-audio/generator"
-	"github.com/go-audio/transforms"
 	log "github.com/golang/glog"
 	"github.com/gordonklaus/portaudio"
 )
@@ -25,6 +21,7 @@ var (
 	dataBufferSize  = flag.Int("data_buffer_size", 1, "The size of the data buffer, for gradual input delay.")
 	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
 	configFile      = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
+	baseVolume      = flag.Float64("volume", 0.5, "The base volume.")
 )
 
 func main() {
@@ -42,7 +39,7 @@ func main() {
 	}()
 
 	log.Info("starting up an reading from stdin")
-	if err := doMain(ctx, os.Stdin, *dataBufferSize, *audioBufferSize, *configFile); err != nil {
+	if err := doMain(ctx, os.Stdin, *audioBufferSize, *configFile, float32(*baseVolume)); err != nil {
 		log.Exitf("failed to run: %v", err)
 	}
 }
@@ -66,33 +63,25 @@ func (pld *sensorPayload) getValue(sid string) (int32, bool) {
 	return 0, false
 }
 
-const defaultFreq = 440.0
-
-// frequencyMap is a mapping of sesor input names to their corresponding frequencies (in Hz).
-var frequencyMap = map[string]float64{
-	"input_1001": 261.63,
-	"input_1002": 329.63,
-	"input_1003": 392.00,
-}
-
-func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBufferSize int, configFile string) error {
+func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFile string, baseVolume float32) error {
 	scanner := bufio.NewScanner(input)
-
-	db := NewRingBuffer(dataBufferSize)
 
 	cfg, err := ParseIOConfigFromFile(configFile)
 	if err != nil {
 		return fmt.Errorf("failed to parse config from %q: %w", configFile, err)
 	}
-	log.V(5).Info("got config for %d sensors", len(cfg.Sensors))
+	log.V(5).InfoContextf(ctx, "got config for %d sensors: %v", len(cfg.Sensors), cfg)
 
-	buf := &audio.FloatBuffer{
-		Data:   make([]float64, audioBufferSize),
-		Format: audio.FormatMono44100,
+	// A map of input sensor names to sine waves.
+	var inputToSines map[string]*Sine = map[string]*Sine{}
+	for _, s := range cfg.Sensors {
+		log.InfoContextf(ctx, "got sensor config: %+v", s)
+		inputToSines[s.SensorName] = NewSineWave(
+			s.MainTone,
+			DEFAULT_SAMPLE_RATE,
+			1.0,
+		)
 	}
-
-	osc := generator.NewOsc(generator.WaveSine, defaultFreq, buf.Format.SampleRate)
-	osc.Amplitude = 1
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -111,17 +100,17 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 				continue
 			}
 
-			if err := handlePayload(ctx, pld, db, payloads); err != nil {
+			if err := handlePayload(ctx, pld, payloads); err != nil {
 				log.WarningContextf(ctx, "failed to handle payload: %v", err)
 				continue
 			}
 		}
-		// if err := scanner.Err(); err != nil {
-		// 	return fmt.Errorf("got error from scanner: %w", err)
-		// }
+		if err := scanner.Err(); err != nil {
+			log.WarningContextf(ctx, "got error from scanner: %v", err)
+		}
 	}()
 
-	runAudio(ctx, osc, buf, audioBufferSize, payloads, sig)
+	runAudio(ctx, inputToSines, audioBufferSize, baseVolume, payloads, sig)
 
 	return nil
 }
@@ -129,13 +118,9 @@ func doMain(ctx context.Context, input io.Reader, dataBufferSize int, audioBuffe
 const MAX_FSR_READING = 1024 - 1
 const WIDTH = 120
 
-func handlePayload(ctx context.Context, pld sensorPayload, db *RingBuffer, payloads chan<- sensorPayload) error {
+func handlePayload(ctx context.Context, pld sensorPayload, payloads chan<- sensorPayload) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
-	log.V(2).InfoContextf(ctx, "got payload at uptime %s", uptime)
-	var lastSensor = pld.SensorData[len(pld.SensorData)-1]
-	var mapped int = WIDTH * int(lastSensor.Value) / MAX_FSR_READING
-	log.V(5).InfoContextf(ctx, "mapped fsr reading %d to %d", lastSensor.Value, mapped)
-	log.V(2).InfoContextf(ctx, strings.Repeat("#", mapped))
+	log.V(2).InfoContextf(ctx, "got payload at uptime %s: %+v", uptime.String(), pld)
 
 	// TODO: use ring buffer for delay effect on changes for gradual smoothing.
 
@@ -144,9 +129,7 @@ func handlePayload(ctx context.Context, pld sensorPayload, db *RingBuffer, paylo
 	return nil
 }
 
-func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, audioBufferSize int, payloads <-chan sensorPayload, sig chan os.Signal) {
-	var currentVol float64 = 1
-
+func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, payloads <-chan sensorPayload, sig chan os.Signal) {
 	out := make([]float32, audioBufferSize)
 	stream, err := portaudio.OpenDefaultStream(0, 1, 44100, len(out), &out)
 	if err != nil {
@@ -159,6 +142,8 @@ func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, a
 	}
 	defer stream.Stop()
 
+	numSines := len(sensorsToSines)
+
 	var currentPayload sensorPayload
 	for {
 
@@ -169,10 +154,7 @@ func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, a
 
 		select {
 		case pld := <-payloads:
-			if len(currentPayload.SensorData) == 0 { // FIXME
-				log.V(2).Infoln("set current payload")
-				currentPayload = pld
-			}
+			currentPayload = pld
 		case <-sig:
 			log.InfoContext(ctx, "stopping audio")
 			return
@@ -180,41 +162,70 @@ func runAudio(ctx context.Context, osc *generator.Osc, buf *audio.FloatBuffer, a
 			log.V(5).InfoContextf(ctx, "nothing from the input channel!")
 		}
 
-		// populate the out buffer
-		for sensorID, freq := range frequencyMap {
-			value, ok := currentPayload.getValue(sensorID)
-			if !ok {
-				log.WarningContextf(ctx, "no sensor value for ID %q", sensorID)
-				continue
-			}
-
-			osc.Reset()
-			osc.Freq = freq
-			osc.Amplitude = float64(value) / float64(MAX_FSR_READING)
-			if err := osc.Fill(buf); err != nil {
-				log.V(5).Infoln("error filling up the buffer")
-			}
-
-			// add that audio to the output buffer
-			cpy := buf.AsFloat32Buffer().Data
-			denom := float32(len(frequencyMap))
+		for name, sine := range sensorsToSines {
+			tmp := make([]float32, len(out))
+			fillBuffer(ctx, name, sine, currentPayload, tmp)
 			for i := range out {
-				// divide by the number of sines to avoid clipping
-				out[i] += cpy[i] / denom
+				out[i] += tmp[i] / float32(numSines)
 			}
 		}
 
-		currentVol = 3
-		log.V(2).InfoContextf(ctx, "current volume at %f", currentVol)
-
-		transforms.Gain(buf, currentVol)
-
-		// f64ToF32Copy(out, buf.Data)
-		// out = buf.AsFloat32Buffer().Data
-
-		// write to the stream
-		if err := stream.Write(); err != nil {
-			log.ErrorContextf(ctx, "error writing to stream : %v\n", err)
+		for i := range out {
+			out[i] *= baseVolume
 		}
+
+		if err := stream.Write(); err != nil {
+			log.ErrorContextf(ctx, "failed to write to portaudio stream: %v", err)
+		}
+
+		// // populate the out buffer
+		// for sensorID, freq := range frequencyMap {
+		// 	value, ok := currentPayload.getValue(sensorID)
+		// 	if !ok {
+		// 		log.WarningContextf(ctx, "no sensor value for ID %q", sensorID)
+		// 		continue
+		// 	}
+
+		// 	osc.Reset()
+		// 	osc.Freq = freq
+		// 	osc.Amplitude = float64(value) / float64(MAX_FSR_READING)
+		// 	if err := osc.Fill(buf); err != nil {
+		// 		log.V(5).Infoln("error filling up the buffer")
+		// 	}
+
+		// 	// add that audio to the output buffer
+		// 	cpy := buf.AsFloat32Buffer().Data
+		// 	denom := float32(len(frequencyMap))
+		// 	for i := range out {
+		// 		// divide by the number of sines to avoid clipping
+		// 		out[i] += cpy[i] / denom
+		// 	}
+		// }
+
+		// currentVol = 3
+		// log.V(2).InfoContextf(ctx, "current volume at %f", currentVol)
+
+		// transforms.Gain(buf, currentVol)
+
+		// // f64ToF32Copy(out, buf.Data)
+		// // out = buf.AsFloat32Buffer().Data
+
+		// // write to the stream
+		// if err := stream.Write(); err != nil {
+		// 	log.ErrorContextf(ctx, "error writing to stream : %v\n", err)
+		// }
 	}
+}
+
+func fillBuffer(ctx context.Context, sensorName string, sine *Sine, pld sensorPayload, buf []float32) {
+	// val is an int [0, MAX_FSR_READING = 1024 - 1].
+	val, ok := pld.getValue(sensorName)
+	if !ok {
+		log.WarningContextf(ctx, "no sensor named %q configured", sensorName)
+		return
+	}
+	// newVol is a real number in [0, 1].
+	newVol := float64(val) / float64(MAX_FSR_READING)
+	sine.SetVolume(newVol)
+	sine.Fill(buf)
 }
