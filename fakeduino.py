@@ -5,9 +5,9 @@ import json
 import sys
 
 _PERIOD = 1 / (10.0 * 1_000.0)
-_INPUT1_PERIOD = 1 * _PERIOD
-_INPUT2_PERIOD = 1/2.0 * _PERIOD
-_INPUT3_PERIOD = 1/3.0 * _PERIOD
+_INPUT1_PERIOD = 1.0 / _PERIOD
+_INPUT2_PERIOD = 1.0 / (2.0 * _PERIOD)
+_INPUT3_PERIOD = 1.0 / (3.0 * _PERIOD)
 
 _MAX_VALUE = 1024 - 1
 
@@ -41,7 +41,7 @@ def current_millis() -> int:
    return time.time_ns() // 1_000_000
 
 def calculate_input(now: int, period: float) -> int: 
-   return int((math.cos(now * period) / 2 + 0.5) * _MAX_VALUE)
+   return int((math.cos(now / period) / 2 + 0.5) * _MAX_VALUE)
 
 if __name__ == "__main__":
     main()
