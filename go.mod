@@ -9,4 +9,7 @@ require (
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 )
 
-require github.com/go-audio/transforms v0.0.0-20180121090939-51830ccc35a5
+require (
+	github.com/BurntSushi/toml v1.5.0
+	github.com/go-audio/transforms v0.0.0-20180121090939-51830ccc35a5
+)
