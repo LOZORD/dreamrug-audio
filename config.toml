@@ -1,37 +1,39 @@
 # Sensors => tone configuration.
 
-# These notes come from this scale:
-# https://sevish.com/scaleworkshop/?n=5%20equal%20divisions%20of%202%2F1&l=1B5_2B5_3B5_4B5_5B5&c=~-~-~&w=4&y=46&version=2.5.7.
+# These notes come from this scale (D3 432 5-EDO):
+# https://sevish.com/scaleworkshop/?n=5%20equal%20divisions%20of%202%2F1&l=1B5_2B5_3B5_4B5_5B5&f=40.5rcyk5rcy&version=2.5.7
+# 1 - 144.160
+# 2 - 165.596
+# 3 - 190.220
+# 4 - 218.506
+# 5 - 250.997
+# 6 - 288.320 (octave)
+[[sensors]]
+sensor_name = "input_1000"
+main_tone = 165.596
 [[sensors]]
 sensor_name = "input_1001"
-main_tone = 440.00
+main_tone = 190.220
 [[sensors]]
 sensor_name = "input_1002"
-main_tone = 505.427
+main_tone = 144.160
 [[sensors]]
 sensor_name = "input_1003"
-main_tone = 580.583
+main_tone = 218.506
 [[sensors]]
 sensor_name = "input_1004"
-main_tone = 666.915
+main_tone = 0.0
+disable = true
 [[sensors]]
 sensor_name = "input_1005"
-main_tone = 766.084
+main_tone = 0.0
+disable = true
+[[sensors]]
+sensor_name = "input_1006"
+main_tone = 0.0
+disable = true
+[[sensors]]
+sensor_name = "input_1007"
+main_tone = 0.0
+disable = true
 
-
-# The notes are a Dmaj6maj7 chord.
-# [[sensors]]
-# sensor_name = "input_1001"
-# main_tone = 293.66
-# [[sensors]]
-# sensor_name = "input_1002"
-# main_tone = 369.99
-# [[sensors]]
-# sensor_name = "input_1003"
-# main_tone = 440.00
-# [[sensors]]
-# sensor_name = "input_1004"
-# main_tone = 493.88
-# [[sensors]]
-# sensor_name = "input_1005"
-# main_tone = 554.37
