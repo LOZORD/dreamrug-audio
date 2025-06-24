@@ -39,6 +39,7 @@ func main() {
 	}()
 
 	log.Info("starting up and reading from stdin")
+	// TODO: log a warning if the user doesn't provide any data over stdin.
 	if err := doMain(ctx, os.Stdin, *audioBufferSize, *configFile, float32(*baseVolume)); err != nil {
 		log.Exitf("failed to run: %v", err)
 	}
@@ -76,6 +77,11 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 	var inputToSines map[string]*Sine = map[string]*Sine{}
 	for _, s := range cfg.Sensors {
 		log.V(5).InfoContextf(ctx, "got sensor config: %+v", s)
+
+		if s.Disable {
+			continue
+		}
+
 		// TODO: also set up some octaves.
 		// We will need to configure octave-specific relative volumes in order to produce the Shepherd tone effect.
 		inputToSines[s.SensorName] = NewSineWave(
@@ -100,6 +106,11 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 			if err := json.Unmarshal([]byte(txt), &pld); err != nil {
 				log.V(2).InfoContextf(ctx, "failed to unmarshall content to sensorPayload (skipping): %q: %v", txt, err)
 				continue
+			}
+
+			if log.V(2) {
+				bs, _ := json.Marshal(&pld)
+				log.V(2).InfoContextf(ctx, "got JSON payload: %s", bs)
 			}
 
 			if err := handlePayload(ctx, pld, payloads); err != nil {
@@ -222,7 +233,7 @@ func fillBuffer(ctx context.Context, sensorName string, sine *Sine, pld sensorPa
 	// val is an int [0, MAX_FSR_READING = 1024 - 1].
 	val, ok := pld.getValue(sensorName)
 	if !ok {
-		log.WarningContextf(ctx, "no sensor named %q configured", sensorName)
+		log.V(2).InfoContext(ctx, "no sensor named %q configured; from payload: %s", sensorName, pld)
 		return
 	}
 	// newVol is a real number in [0, 1].

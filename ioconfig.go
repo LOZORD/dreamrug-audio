@@ -14,6 +14,7 @@ type IOConfig struct {
 type SensorToneConfig struct {
 	SensorName string  `toml:"sensor_name"`
 	MainTone   float64 `toml:"main_tone"`
+	Disable    bool    `toml:"disable"`
 }
 
 func ParseIOConfigFromFile(file string) (*IOConfig, error) {
