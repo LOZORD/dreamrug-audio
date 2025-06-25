@@ -205,12 +205,22 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer stream.Close()
+	defer func() {
+		log.InfoContext(ctx, "closing stream")
+		if err := stream.Close(); err != nil {
+			log.ErrorContextf(ctx, "failed to close stream: %v", err)
+		}
+	}()
 
 	if err := stream.Start(); err != nil {
 		log.Fatal(err)
 	}
-	defer stream.Stop()
+	defer func() {
+		log.InfoContext(ctx, "stopping stream")
+		if err := stream.Stop(); err != nil {
+			log.ErrorContextf(ctx, "failed to stop stream: %v", err)
+		}
+	}()
 
 	numSines := len(sensorsToSines)
 
