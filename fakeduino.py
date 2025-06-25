@@ -19,10 +19,9 @@ def main(args: any):
 
     sensors = []
     for i in range(num_inputs):
-       n = i + 1
-       period = 1_000.0 * n * period_multipler
+       period = 1_000.0 * (i + 1) * period_multipler
        sensors.append({
-          'name': f'input_{1_000 + n}',
+          'name': f'input_{1_000 + i}',
           'value': calculate_input(now_ms, period),
        })
 
