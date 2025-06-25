@@ -31,5 +31,5 @@ sensor_name = "input_1006"
 main_tone = 218.506
 [[sensors]] # sensor 8
 sensor_name = "input_1007"
-main_tone = 331.192 # 165.596
+main_tone = 331.193 # Double of tone (2).
 

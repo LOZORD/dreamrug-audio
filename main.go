@@ -18,11 +18,19 @@ import (
 
 // Flags.
 var (
-	dataBufferSize  = flag.Int("data_buffer_size", 1, "The size of the data buffer, for gradual input delay.")
+	dataBufferSize  = flag.Int("data_buffer_size", 0, "The size of the data buffer, for gradual input delay. Use 0 for no delay/buffering.")
 	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
 	configFile      = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
 	baseVolume      = flag.Float64("volume", 0.5, "The base volume.")
 )
+
+type mainConfig struct {
+	input           io.Reader
+	audioBufferSize int
+	delayBufferSize int
+	configFilePath  string // TODO: make this an io.Reader as well.
+	baseVolume      float32
+}
 
 func main() {
 	flag.Parse()
@@ -40,7 +48,16 @@ func main() {
 
 	log.Info("starting up and reading from stdin")
 	// TODO: log a warning if the user doesn't provide any data over stdin.
-	if err := doMain(ctx, os.Stdin, *audioBufferSize, *configFile, float32(*baseVolume)); err != nil {
+
+	cfg := &mainConfig{
+		input:           os.Stdin,
+		audioBufferSize: *audioBufferSize,
+		delayBufferSize: *dataBufferSize,
+		configFilePath:  *configFile,
+		baseVolume:      float32(*baseVolume),
+	}
+
+	if err := doMain(ctx, cfg); err != nil {
 		log.Exitf("failed to run: %v", err)
 	}
 }
@@ -64,10 +81,10 @@ func (pld *sensorPayload) getValue(sid string) (int32, bool) {
 	return 0, false
 }
 
-func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFile string, baseVolume float32) error {
-	scanner := bufio.NewScanner(input)
+func doMain(ctx context.Context, mc *mainConfig) error {
+	scanner := bufio.NewScanner(mc.input)
 
-	cfg, err := ParseIOConfigFromFile(configFile)
+	cfg, err := ParseIOConfigFromFile(mc.configFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to parse config from %q: %w", configFile, err)
 	}
@@ -97,6 +114,14 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 	payloads := make(chan sensorPayload)
 
 	go func() {
+		var delayBuffers map[string]*RingBuffer
+		if mc.delayBufferSize >= 1 {
+			delayBuffers = make(map[string]*RingBuffer)
+			for i := range inputToSines {
+				delayBuffers[i] = NewRingBuffer(mc.delayBufferSize)
+			}
+		}
+
 		for scanner.Scan() {
 			txt := scanner.Text()
 
@@ -113,7 +138,7 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 				log.V(2).InfoContextf(ctx, "got JSON payload: %s", bs)
 			}
 
-			if err := handlePayload(ctx, pld, payloads); err != nil {
+			if err := handlePayload(ctx, delayBuffers, pld, payloads); err != nil {
 				log.WarningContextf(ctx, "failed to handle payload: %v", err)
 				continue
 			}
@@ -123,27 +148,60 @@ func doMain(ctx context.Context, input io.Reader, audioBufferSize int, configFil
 		}
 	}()
 
-	runAudio(ctx, inputToSines, audioBufferSize, baseVolume, payloads, sig)
+	runAudio(ctx, inputToSines, mc.audioBufferSize, mc.baseVolume, payloads, sig)
 
 	return nil
 }
 
 const MAX_FSR_READING = 1024 - 1
+const DELAY_BUFFER_AVERAGE_BIAS = 0
 
-func handlePayload(ctx context.Context, pld sensorPayload, payloads chan<- sensorPayload) error {
+func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld sensorPayload, payloads chan<- sensorPayload) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
 	log.V(2).InfoContextf(ctx, "got payload at uptime %s: %+v", uptime.String(), pld)
 
-	// TODO: use ring buffer for delay effect on changes for gradual smoothing.
+	// Just send the current payload without delay.
+	if len(delayBuffers) == 0 {
+		payloads <- pld
+		return nil
+	}
 
-	payloads <- pld
+	pldToSend := sensorPayload{
+		UptimeMillis: pld.UptimeMillis,
+	}
+
+	// Update the delay buffers and generate a new payload based on the average values across the buffers.
+	for _, s := range pld.SensorData {
+		buf, ok := delayBuffers[s.Name]
+		if !ok {
+			log.WarningContextf(ctx, "no delay buffer configured for senor %q", s.Name)
+			continue
+		}
+
+		buf.Insert(int(s.Value))
+		avg, err := buf.Average(0.0)
+		if err != nil {
+			log.WarningContextf(ctx, "failed to get average for delay buffer for %q: %v", s.Name, err)
+			continue
+		}
+		avgReading := &sensorReading{
+			Name:  s.Name,
+			Value: int32(avg),
+		}
+		pldToSend.SensorData = append(pldToSend.SensorData, avgReading)
+	}
+
+	payloads <- pldToSend
 
 	return nil
 }
 
+// TODO: add an LFO for channel panning.
+const NUM_OUTPUT_CHANNELS = 2
+
 func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, payloads <-chan sensorPayload, sig chan os.Signal) {
 	out := make([]float32, audioBufferSize)
-	stream, err := portaudio.OpenDefaultStream(0, 1, 44100, len(out), &out)
+	stream, err := portaudio.OpenDefaultStream(0, NUM_OUTPUT_CHANNELS, 44100, len(out), &out)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -189,43 +247,6 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 		if err := stream.Write(); err != nil {
 			log.ErrorContextf(ctx, "failed to write to portaudio stream: %v", err)
 		}
-
-		// // populate the out buffer
-		// for sensorID, freq := range frequencyMap {
-		// 	value, ok := currentPayload.getValue(sensorID)
-		// 	if !ok {
-		// 		log.WarningContextf(ctx, "no sensor value for ID %q", sensorID)
-		// 		continue
-		// 	}
-
-		// 	osc.Reset()
-		// 	osc.Freq = freq
-		// 	osc.Amplitude = float64(value) / float64(MAX_FSR_READING)
-		// 	if err := osc.Fill(buf); err != nil {
-		// 		log.V(5).Infoln("error filling up the buffer")
-		// 	}
-
-		// 	// add that audio to the output buffer
-		// 	cpy := buf.AsFloat32Buffer().Data
-		// 	denom := float32(len(frequencyMap))
-		// 	for i := range out {
-		// 		// divide by the number of sines to avoid clipping
-		// 		out[i] += cpy[i] / denom
-		// 	}
-		// }
-
-		// currentVol = 3
-		// log.V(2).InfoContextf(ctx, "current volume at %f", currentVol)
-
-		// transforms.Gain(buf, currentVol)
-
-		// // f64ToF32Copy(out, buf.Data)
-		// // out = buf.AsFloat32Buffer().Data
-
-		// // write to the stream
-		// if err := stream.Write(); err != nil {
-		// 	log.ErrorContextf(ctx, "error writing to stream : %v\n", err)
-		// }
 	}
 }
 
