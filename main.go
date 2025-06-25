@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -87,7 +88,7 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 
 	cfg, err := ParseIOConfigFromFile(mc.configFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to parse config from %q: %w", configFile, err)
+		return fmt.Errorf("failed to parse config from %q: %w", mc.configFilePath, err)
 	}
 	log.V(5).InfoContextf(ctx, "got config for %d sensors: %v", len(cfg.Sensors), cfg)
 
@@ -127,6 +128,11 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 			txt := scanner.Text()
 
 			log.V(5).InfoContextf(ctx, "got content: %s", txt)
+
+			txt = strings.TrimSpace(txt)
+			if txt == "" {
+				continue // Don't try to handle newlines from the Arduino.
+			}
 
 			var pld sensorPayload
 			if err := json.Unmarshal([]byte(txt), &pld); err != nil {
