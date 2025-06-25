@@ -8,32 +8,28 @@
 # 4 - 218.506
 # 5 - 250.997
 # 6 - 288.320 (octave)
-[[sensors]]
+[[sensors]] # sensor 1
 sensor_name = "input_1000"
 main_tone = 165.596
-[[sensors]]
+[[sensors]] # sensor 2
 sensor_name = "input_1001"
-main_tone = 190.220
-[[sensors]]
-sensor_name = "input_1002"
-main_tone = 144.160
-[[sensors]]
-sensor_name = "input_1003"
 main_tone = 218.506
-[[sensors]]
+[[sensors]] # sensor 3
+sensor_name = "input_1002" 
+main_tone = 288.320
+[[sensors]] # sensor 4
+sensor_name = "input_1003"
+main_tone = 190.220
+[[sensors]] # sensor 5
 sensor_name = "input_1004"
-main_tone = 0.0
-disable = true
-[[sensors]]
+main_tone = 144.160
+[[sensors]] # sensor 6
 sensor_name = "input_1005"
-main_tone = 0.0
-disable = true
-[[sensors]]
+main_tone = 250.997
+[[sensors]] # sensor 7
 sensor_name = "input_1006"
-main_tone = 0.0
-disable = true
-[[sensors]]
+main_tone = 218.506
+[[sensors]] # sensor 8
 sensor_name = "input_1007"
-main_tone = 0.0
-disable = true
+main_tone = 165.596
 
