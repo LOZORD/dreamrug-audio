@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"syscall"
@@ -260,6 +261,8 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 	}
 }
 
+const USE_SINUSOIDAL_MAPPING = true
+
 func fillBuffer(ctx context.Context, sensorName string, sine *Sine, pld sensorPayload, buf []float32) {
 	// val is an int [0, MAX_FSR_READING = 1024 - 1].
 	val, ok := pld.getValue(sensorName)
@@ -267,8 +270,25 @@ func fillBuffer(ctx context.Context, sensorName string, sine *Sine, pld sensorPa
 		log.V(2).InfoContext(ctx, "no sensor named %q configured; from payload: %s", sensorName, pld)
 		return
 	}
+
+	if val > MAX_FSR_READING {
+		val = MAX_FSR_READING
+	}
+	if val < 0 {
+		val = 0
+	}
+
 	// newVol is a real number in [0, 1].
 	newVol := float64(val) / float64(MAX_FSR_READING)
+
+	if USE_SINUSOIDAL_MAPPING {
+		// Apply the sinusoidal ease-in-out formula to 't' ( = newVol). [yes this is vibe coded]
+		// This formula takes a linear input (t) and makes it curve smoothly.
+		//   - When t=0, result is -(cos(0)-1)/2 = -(1-1)/2 = 0
+		//   - When t=1, result is -(cos(PI)-1)/2 = -(-1-1)/2 = 1
+		newVol = -(math.Cos(math.Pi*newVol) - 1) / 2
+	}
+
 	sine.SetVolume(newVol)
 	sine.Fill(buf)
 }
