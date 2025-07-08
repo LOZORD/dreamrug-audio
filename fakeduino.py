@@ -12,6 +12,7 @@ def main(args: any):
    start_time = current_millis()
    num_inputs = int(args.sensor_count)
    period_multipler = float(args.period_multiplier)
+   sleep_duration = float(args.sleep_duration)
 
    while True:
     now_ms = current_millis()
@@ -33,7 +34,7 @@ def main(args: any):
     js = json.dumps(pld)
     sys.stdout.write(js + '\n')
     sys.stdout.flush()
-    time.sleep(0.1)
+    time.sleep(sleep_duration)
 
 def current_millis() -> int:
    return time.time_ns() // 1_000_000
@@ -52,6 +53,10 @@ if __name__ == "__main__":
    parser.add_argument('--period_multiplier',
                         default=1.0,
                         help='The period multipler to use for the sensor output waves.',
+                       )
+   parser.add_argument('--sleep_duration',
+                       default=0.1,
+                       help='The number of seconds to sleep before each output cycle. Can be fractional.',
                        )
    args = parser.parse_args()
    main(args)
