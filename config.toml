@@ -13,7 +13,7 @@ sensor_name = "input_1000"
 main_tone = 165.596
 [[sensors]] # sensor 2
 sensor_name = "input_1001"
-main_tone = 218.506
+main_tone = 437.011 # 218.506 (*2)
 [[sensors]] # sensor 3
 sensor_name = "input_1002" 
 main_tone = 288.320
@@ -22,10 +22,10 @@ sensor_name = "input_1003"
 main_tone = 190.220
 [[sensors]] # sensor 5
 sensor_name = "input_1004"
-main_tone = 144.160
+main_tone = 72.08 # 144.160 (/2)
 [[sensors]] # sensor 6
 sensor_name = "input_1005"
-main_tone = 250.997
+main_tone = 125.499 # 250.997 (/2)
 [[sensors]] # sensor 7
 sensor_name = "input_1006"
 main_tone = 218.506
