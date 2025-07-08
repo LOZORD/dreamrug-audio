@@ -24,6 +24,8 @@ var (
 	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
 	configFile      = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
 	baseVolume      = flag.Float64("volume", 0.5, "The base volume.")
+	inactiveLimit   = flag.Int("inactive_limit", 0, "Cutoff for determining if a sensor is inactive.")
+	// TODO: ^ add this `inactiveLimit` to the main config.
 )
 
 type mainConfig struct {
@@ -186,10 +188,14 @@ func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld
 		}
 
 		buf.Insert(int(s.Value))
-		avg, err := buf.Average(0.0)
+		avg, err := buf.Average(DELAY_BUFFER_AVERAGE_BIAS)
 		if err != nil {
 			log.WarningContextf(ctx, "failed to get average for delay buffer for %q: %v", s.Name, err)
 			continue
+		}
+		// If the average seems like the sensor is inactive, make it quieter.
+		if *inactiveLimit > 0 && avg < float64(*inactiveLimit) {
+			avg /= 2.0 // TODO: Should this 2.0 be a flag too?
 		}
 		avgReading := &sensorReading{
 			Name:  s.Name,
