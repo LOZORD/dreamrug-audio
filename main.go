@@ -25,6 +25,7 @@ var (
 	configFile      = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
 	baseVolume      = flag.Float64("volume", 0.5, "The base volume.")
 	inactiveLimit   = flag.Int("inactive_limit", 0, "Cutoff for determining if a sensor is inactive.")
+	maxReading      = flag.Int("max_reading", (1024*4)-1, "The maximum vlaue that the Arduino can send.")
 	// TODO: ^ add this `inactiveLimit` to the main config.
 )
 
@@ -34,6 +35,7 @@ type mainConfig struct {
 	delayBufferSize int
 	configFilePath  string // TODO: make this an io.Reader as well.
 	baseVolume      float32
+	maxReading      int
 }
 
 func main() {
@@ -59,6 +61,7 @@ func main() {
 		delayBufferSize: *dataBufferSize,
 		configFilePath:  *configFile,
 		baseVolume:      float32(*baseVolume),
+		maxReading:      *maxReading,
 	}
 
 	if err := doMain(ctx, cfg); err != nil {
@@ -157,12 +160,11 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 		}
 	}()
 
-	runAudio(ctx, inputToSines, mc.audioBufferSize, mc.baseVolume, payloads, sig)
+	runAudio(ctx, inputToSines, mc.audioBufferSize, mc.baseVolume, mc.maxReading, payloads, sig)
 
 	return nil
 }
 
-const MAX_FSR_READING = 1024 - 1
 const DELAY_BUFFER_AVERAGE_BIAS = 0
 
 func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld sensorPayload, payloads chan<- sensorPayload) error {
@@ -212,7 +214,7 @@ func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld
 // TODO: add an LFO for channel panning.
 const NUM_OUTPUT_CHANNELS = 2
 
-func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, payloads <-chan sensorPayload, sig chan os.Signal) {
+func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, payloads <-chan sensorPayload, sig chan os.Signal) {
 	out := make([]float32, audioBufferSize)
 	stream, err := portaudio.OpenDefaultStream(0, NUM_OUTPUT_CHANNELS, 44100, len(out), &out)
 	if err != nil {
@@ -257,7 +259,7 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 
 		for name, sine := range sensorsToSines {
 			tmp := make([]float32, len(out))
-			fillBuffer(ctx, name, sine, currentPayload, tmp)
+			fillBuffer(ctx, maxReading, name, sine, currentPayload, tmp)
 			for i := range out {
 				out[i] += tmp[i] / float32(numSines)
 			}
@@ -275,23 +277,23 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 
 const USE_SINUSOIDAL_MAPPING = true
 
-func fillBuffer(ctx context.Context, sensorName string, sine *Sine, pld sensorPayload, buf []float32) {
-	// val is an int [0, MAX_FSR_READING = 1024 - 1].
+func fillBuffer(ctx context.Context, maxReading int, sensorName string, sine *Sine, pld sensorPayload, buf []float32) {
+	// val is an int [0, maxReading].
 	val, ok := pld.getValue(sensorName)
 	if !ok {
 		log.V(2).InfoContext(ctx, "no sensor named %q configured; from payload: %s", sensorName, pld)
 		return
 	}
 
-	if val > MAX_FSR_READING {
-		val = MAX_FSR_READING
+	if val > int32(maxReading) {
+		val = int32(maxReading)
 	}
 	if val < 0 {
 		val = 0
 	}
 
 	// newVol is a real number in [0, 1].
-	newVol := float64(val) / float64(MAX_FSR_READING)
+	newVol := float64(val) / float64(maxReading)
 
 	if USE_SINUSOIDAL_MAPPING {
 		// Apply the sinusoidal ease-in-out formula to 't' ( = newVol). [yes this is vibe coded]
