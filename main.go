@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"math"
 	"os"
@@ -33,7 +32,7 @@ type mainConfig struct {
 	input           io.Reader
 	audioBufferSize int
 	delayBufferSize int
-	configFilePath  string // TODO: make this an io.Reader as well.
+	ioConfig        *IOConfig
 	baseVolume      float32
 	inactiveLimit   int
 	maxReading      int
@@ -57,11 +56,16 @@ func main() {
 	log.Info("starting up and reading from stdin")
 	// TODO: log a warning if the user doesn't provide any data over stdin.
 
+	ioCfg, err := ParseIOConfigFromFile(*configFile)
+	if err != nil {
+		log.ExitContextf(ctx, "failed to parse IO config from %q: %v", *configFile, ioCfg)
+	}
+
 	cfg := &mainConfig{
 		input:           os.Stdin,
 		audioBufferSize: *audioBufferSize,
 		delayBufferSize: *dataBufferSize,
-		configFilePath:  *configFile,
+		ioConfig:        ioCfg,
 		baseVolume:      float32(*baseVolume),
 		inactiveLimit:   *inactiveLimit,
 		maxReading:      *maxReading,
@@ -95,15 +99,11 @@ func (pld *sensorPayload) getValue(sid string) (int32, bool) {
 func doMain(ctx context.Context, mc *mainConfig) error {
 	scanner := bufio.NewScanner(mc.input)
 
-	cfg, err := ParseIOConfigFromFile(mc.configFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to parse config from %q: %w", mc.configFilePath, err)
-	}
-	log.V(5).InfoContextf(ctx, "got config for %d sensors: %v", len(cfg.Sensors), cfg)
+	log.V(5).InfoContextf(ctx, "got config for %d sensors: %v", len(mc.ioConfig.Sensors), mc.ioConfig)
 
 	// A map of input sensor names to sine waves.
 	var inputToSines map[string]*Sine = map[string]*Sine{}
-	for _, s := range cfg.Sensors {
+	for _, s := range mc.ioConfig.Sensors {
 		log.V(5).InfoContextf(ctx, "got sensor config: %+v", s)
 
 		if s.Disable {
