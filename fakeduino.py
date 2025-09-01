@@ -6,7 +6,7 @@ import sys
 import time
 
 
-_MAX_VALUE = 1024 - 1
+_MAX_VALUE = 4096 - 1
 
 def main(args: any):
    start_time = current_millis()
