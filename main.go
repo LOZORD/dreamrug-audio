@@ -211,12 +211,19 @@ func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld
 	return nil
 }
 
-// TODO: add an LFO for channel panning.
+// TODO: add an LFO for stereo channel panning.
 const NUM_OUTPUT_CHANNELS = 2
+
+// This program doesn't accept input besides the sensor JSON payloads.
+const NUM_INPUT_CHANNELS = 0
+
+// https://dsp.stackexchange.com/q/17685
+const SAMPLE_RATE = 44100
 
 func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, payloads <-chan sensorPayload, sig chan os.Signal) {
 	out := make([]float32, audioBufferSize)
-	stream, err := portaudio.OpenDefaultStream(0, NUM_OUTPUT_CHANNELS, 44100, len(out), &out)
+	// TODO: Add the ability to output the stream to a file. I.e. save to a .wav or .mp3.
+	stream, err := portaudio.OpenDefaultStream(NUM_INPUT_CHANNELS, NUM_OUTPUT_CHANNELS, SAMPLE_RATE, len(out), &out)
 	if err != nil {
 		log.Fatal(err)
 	}
