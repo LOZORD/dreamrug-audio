@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -13,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-audio/audio"
+	"github.com/go-audio/transforms"
+	"github.com/go-audio/wav"
 	log "github.com/golang/glog"
 	"github.com/gordonklaus/portaudio"
 )
@@ -26,6 +30,7 @@ var (
 	inactiveLimit   = flag.Int("inactive_limit", 0, "Cutoff for determining if a sensor is inactive.")
 	maxReading      = flag.Int("max_reading", (1024*4)-1, "The maximum vlaue that the Arduino can send.")
 	alsoLogDevices  = flag.Bool("alsologdevices", false, "If true, log devices that portaudio is aware of.")
+	outputWavFile   = flag.String("output_wav_file", "", "If set, write the audio output to this .wav file instead of playing audio.")
 )
 
 type mainConfig struct {
@@ -37,6 +42,7 @@ type mainConfig struct {
 	inactiveLimit   int
 	maxReading      int
 	alsoLogDevices  bool
+	outputWavFile   string
 }
 
 func main() {
@@ -70,6 +76,7 @@ func main() {
 		inactiveLimit:   *inactiveLimit,
 		maxReading:      *maxReading,
 		alsoLogDevices:  *alsoLogDevices,
+		outputWavFile:   *outputWavFile,
 	}
 
 	if err := doMain(ctx, cfg); err != nil {
@@ -105,7 +112,6 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 	var inputToSines map[string]*Sine = map[string]*Sine{}
 	for _, s := range mc.ioConfig.Sensors {
 		log.V(5).InfoContextf(ctx, "got sensor config: %+v", s)
-
 		if s.Disable {
 			continue
 		}
@@ -148,18 +154,15 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 			if txt == "" {
 				continue // Don't try to handle newlines from the Arduino.
 			}
-
 			var pld sensorPayload
 			if err := json.Unmarshal([]byte(txt), &pld); err != nil {
 				log.V(2).InfoContextf(ctx, "failed to unmarshall content to sensorPayload (skipping): %q: %v", txt, err)
 				continue
 			}
-
 			if log.V(2) {
 				bs, _ := json.Marshal(&pld)
 				log.V(2).InfoContextf(ctx, "got JSON payload: %s", bs)
 			}
-
 			if err := handlePayload(ctx, delayBuffers, pld, payloads, mc.inactiveLimit); err != nil {
 				log.WarningContextf(ctx, "failed to handle payload: %v", err)
 				continue
@@ -170,8 +173,14 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 		}
 	}()
 
-	runAudio(ctx, inputToSines, mc.audioBufferSize, mc.baseVolume, mc.maxReading, payloads, sig)
-
+	runAudio(ctx,
+		inputToSines,
+		mc.audioBufferSize,
+		mc.baseVolume,
+		mc.maxReading,
+		mc.outputWavFile,
+		payloads,
+		sig)
 	return nil
 }
 
@@ -180,11 +189,9 @@ func logDevices(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	for _, d := range ds {
 		log.InfoContextf(ctx, "device[%d] %q: %+v", d.Index, d.Name, d)
 	}
-
 	return nil
 }
 
@@ -193,7 +200,8 @@ const DELAY_BUFFER_AVERAGE_BIAS = 0
 // The amount to divide the signal by if it is below the configured inactive limit.
 const BELOW_INACTIVE_LIMIT_SHRINK_AMOUNT = 2.0
 
-func handlePayload(ctx context.Context,
+func handlePayload(
+	ctx context.Context,
 	delayBuffers map[string]*RingBuffer,
 	pld sensorPayload,
 	payloads chan<- sensorPayload,
@@ -201,17 +209,12 @@ func handlePayload(ctx context.Context,
 ) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
 	log.V(2).InfoContextf(ctx, "got payload at uptime %s: %+v", uptime.String(), pld)
-
 	// Just send the current payload without delay.
 	if len(delayBuffers) == 0 {
 		payloads <- pld
 		return nil
 	}
-
-	pldToSend := sensorPayload{
-		UptimeMillis: pld.UptimeMillis,
-	}
-
+	pldToSend := sensorPayload{UptimeMillis: pld.UptimeMillis}
 	// Update the delay buffers and generate a new payload based on the average values across the buffers.
 	for _, s := range pld.SensorData {
 		buf, ok := delayBuffers[s.Name]
@@ -219,7 +222,6 @@ func handlePayload(ctx context.Context,
 			log.WarningContextf(ctx, "no delay buffer configured for senor %q", s.Name)
 			continue
 		}
-
 		buf.Insert(int(s.Value))
 		avg, err := buf.Average(DELAY_BUFFER_AVERAGE_BIAS)
 		if err != nil {
@@ -236,9 +238,7 @@ func handlePayload(ctx context.Context,
 		}
 		pldToSend.SensorData = append(pldToSend.SensorData, avgReading)
 	}
-
 	payloads <- pldToSend
-
 	return nil
 }
 
@@ -251,9 +251,19 @@ const NUM_INPUT_CHANNELS = 0
 // https://dsp.stackexchange.com/q/17685
 const SAMPLE_RATE = 44100
 
-func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, payloads <-chan sensorPayload, sig chan os.Signal) {
+// runAudio acts as a simple dispatcher to either play audio out of speaker outputs to writing it to a file.
+func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, outputWavFile string, payloads <-chan sensorPayload, sig chan os.Signal) {
+	if outputWavFile != "" {
+		writeAudioToWav(ctx, sensorsToSines, audioBufferSize, baseVolume, maxReading, outputWavFile, payloads, sig)
+	} else {
+		playAudioLive(ctx, sensorsToSines, audioBufferSize, baseVolume, maxReading, payloads, sig)
+	}
+}
+
+// playAudioLive contains the logic for playing audio to the default speaker device.
+func playAudioLive(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, payloads <-chan sensorPayload, sig chan os.Signal) {
+	log.V(2).InfoContext(ctx, "outputting to default audio device")
 	out := make([]float32, audioBufferSize)
-	// TODO: Add the ability to output the stream to a file. I.e. save to a .wav or .mp3.
 	stream, err := portaudio.OpenDefaultStream(NUM_INPUT_CHANNELS, NUM_OUTPUT_CHANNELS, SAMPLE_RATE, len(out), &out)
 	if err != nil {
 		log.Fatal(err)
@@ -264,7 +274,6 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 			log.ErrorContextf(ctx, "failed to close stream: %v", err)
 		}
 	}()
-
 	if err := stream.Start(); err != nil {
 		log.Fatal(err)
 	}
@@ -275,11 +284,62 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 		}
 	}()
 
+	processAudio(ctx, sensorsToSines, maxReading, baseVolume, out, payloads, sig, func() error {
+		return stream.Write()
+	})
+}
+
+// https://lru.neocities.org and https://github.com/lozord.
+const ARTIST_ENGINEER = "Rudberg, Leo"
+
+// writeAudioToWav contains the logic for writing audio to a WAV file.
+func writeAudioToWav(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, outputWavFile string, payloads <-chan sensorPayload, sig chan os.Signal) {
+	log.InfoContextf(ctx, "outputting to WAV file: %q", outputWavFile)
+	out := make([]float32, audioBufferSize)
+	outFile, err := os.Create(outputWavFile)
+	if err != nil {
+		log.ExitContextf(ctx, "failed to create WAV file: %v", err)
+	}
+	// Setup the WAV encoder with 16-bit depth, 2 channels (stereo), and PCM format.
+	const bitDepth = 16
+	// https://pkg.go.dev/github.com/go-audio/wav#Encoder.WavAudioFormat
+	const pcmNoCompressionAudioFormat = 1
+	encoder := wav.NewEncoder(outFile, SAMPLE_RATE, bitDepth, NUM_OUTPUT_CHANNELS, pcmNoCompressionAudioFormat)
+	encoder.Metadata = &wav.Metadata{
+		Artist:   ARTIST_ENGINEER,
+		Engineer: ARTIST_ENGINEER,
+	}
+	defer func() {
+		if err := encoder.Close(); err != nil {
+			log.ErrorContextf(ctx, "failed to close wav encoder: %v", err)
+		}
+	}()
+
+	audioBuf := &audio.Float32Buffer{
+		Data: out,
+		Format: &audio.Format{
+			NumChannels: NUM_OUTPUT_CHANNELS,
+			SampleRate:  SAMPLE_RATE,
+		},
+	}
+
+	processAudio(ctx, sensorsToSines, maxReading, baseVolume, out, payloads, sig, func() error {
+		if err := transforms.PCMScaleF32(audioBuf, bitDepth); err != nil {
+			return fmt.Errorf("failed to transform to PCMScaleF32: %w", err)
+		}
+
+		ib := audioBuf.AsIntBuffer()
+
+		return encoder.Write(ib)
+	})
+}
+
+// processAudio contains the shared main loop logic to avoid duplication.
+func processAudio(ctx context.Context, sensorsToSines map[string]*Sine, maxReading int, baseVolume float32, out []float32, payloads <-chan sensorPayload, sig chan os.Signal, consumer func() error) {
+	var currentPayload sensorPayload
 	numSines := len(sensorsToSines)
 
-	var currentPayload sensorPayload
 	for {
-
 		// Clear the output buffer.
 		for i := range out {
 			out[i] = 0
@@ -289,12 +349,13 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 		case pld := <-payloads:
 			currentPayload = pld
 		case <-sig:
-			log.InfoContext(ctx, "stopping audio")
+			log.InfoContext(ctx, "stopping audio processing.")
 			return
 		default:
 			log.V(5).InfoContextf(ctx, "nothing from the input channel!")
 		}
 
+		// Synthesize and mix audio from sensors
 		for name, sine := range sensorsToSines {
 			tmp := make([]float32, len(out))
 			fillBuffer(ctx, maxReading, name, sine, currentPayload, tmp)
@@ -303,12 +364,14 @@ func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferS
 			}
 		}
 
+		// Apply base volume
 		for i := range out {
 			out[i] *= baseVolume
 		}
 
-		if err := stream.Write(); err != nil {
-			log.ErrorContextf(ctx, "failed to write to portaudio stream: %v", err)
+		// Write the audio buffer using the provided consumer function
+		if err := consumer(); err != nil {
+			log.ErrorContextf(ctx, "failed to consume audio output: %v", err)
 		}
 	}
 }
