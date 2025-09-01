@@ -26,8 +26,10 @@ var (
 	baseVolume      = flag.Float64("volume", 0.5, "The base volume.")
 	inactiveLimit   = flag.Int("inactive_limit", 0, "Cutoff for determining if a sensor is inactive.")
 	maxReading      = flag.Int("max_reading", (1024*4)-1, "The maximum vlaue that the Arduino can send.")
-	// TODO: ^ add this `inactiveLimit` to the main config.
+	alsoLogDevices  = flag.Bool("alsologdevices", false, "If true, log devices that portaudio is aware of.")
 )
+
+// TODO: add  `inactiveLimit` to the main config. And any other remaining flags.
 
 type mainConfig struct {
 	input           io.Reader
@@ -36,6 +38,7 @@ type mainConfig struct {
 	configFilePath  string // TODO: make this an io.Reader as well.
 	baseVolume      float32
 	maxReading      int
+	alsoLogDevices  bool
 }
 
 func main() {
@@ -62,6 +65,7 @@ func main() {
 		configFilePath:  *configFile,
 		baseVolume:      float32(*baseVolume),
 		maxReading:      *maxReading,
+		alsoLogDevices:  *alsoLogDevices,
 	}
 
 	if err := doMain(ctx, cfg); err != nil {
@@ -115,6 +119,12 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 		)
 	}
 
+	if mc.alsoLogDevices {
+		if err := logDevices(ctx); err != nil {
+			log.WarningContextf(ctx, "failed to log devices: %v", err)
+		}
+	}
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
@@ -161,6 +171,19 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 	}()
 
 	runAudio(ctx, inputToSines, mc.audioBufferSize, mc.baseVolume, mc.maxReading, payloads, sig)
+
+	return nil
+}
+
+func logDevices(ctx context.Context) error {
+	ds, err := portaudio.Devices()
+	if err != nil {
+		return err
+	}
+
+	for _, d := range ds {
+		log.InfoContextf(ctx, "device[%d] %q: %+v", d.Index, d.Name, d)
+	}
 
 	return nil
 }
@@ -288,7 +311,7 @@ func fillBuffer(ctx context.Context, maxReading int, sensorName string, sine *Si
 	// val is an int [0, maxReading].
 	val, ok := pld.getValue(sensorName)
 	if !ok {
-		log.V(2).InfoContext(ctx, "no sensor named %q configured; from payload: %s", sensorName, pld)
+		log.V(2).InfoContextf(ctx, "no sensor named %q configured; from payload: %s", sensorName, pld)
 		return
 	}
 
