@@ -1,0 +1,24 @@
+[[sensors]] # sensor 1
+sensor_name = "input_1000"
+main_tone = 278.498
+[[sensors]] # sensor 2
+sensor_name = "input_1001"
+main_tone = 734.962
+[[sensors]] # sensor 3
+sensor_name = "input_1002"
+main_tone = 484.895
+[[sensors]] # sensor 4
+sensor_name = "input_1003"
+main_tone = 319.911
+[[sensors]] # sensor 5
+sensor_name = "input_1004"
+main_tone = 121.224
+[[sensors]] # sensor 6
+sensor_name = "input_1005"
+main_tone = 211.063
+[[sensors]] # sensor 7
+sensor_name = "input_1006"
+main_tone = 367.482
+[[sensors]] # sensor 8
+sensor_name = "input_1007"
+main_tone = 556.998

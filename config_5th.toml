@@ -1,0 +1,24 @@
+[[sensors]] # sensor 1
+sensor_name = "input_1000"
+main_tone = 248.394
+[[sensors]] # sensor 2
+sensor_name = "input_1001"
+main_tone = 655.517 # 218.506 (*2)
+[[sensors]] # sensor 3
+sensor_name = "input_1002"
+main_tone = 432.480
+[[sensors]] # sensor 4
+sensor_name = "input_1003"
+main_tone = 285.330
+[[sensors]] # sensor 5
+sensor_name = "input_1004"
+main_tone = 108.120 # 144.160 (/2)
+[[sensors]] # sensor 6
+sensor_name = "input_1005"
+main_tone = 188.248 # 250.997 (/2)
+[[sensors]] # sensor 7
+sensor_name = "input_1006"
+main_tone = 327.759
+[[sensors]] # sensor 8
+sensor_name = "input_1007"
+main_tone = 496.789 # Double of tone (2).

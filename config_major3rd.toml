@@ -1,0 +1,37 @@
+# Sensors => tone configuration.
+
+# These notes come from this scale (D3 432 5-EDO):
+# https://sevish.com/scaleworkshop/?n=5%20equal%20divisions%20of%202%2F1&l=1B5_2B5_3B5_4B5_5B5&f=40.5rcyk5rcy&version=2.5.7
+# 1 - 144.160
+# 2 - 165.596
+# 3 - 190.220
+# 4 - 218.506
+# 5 - 250.997
+# 6 - 288.320 (octave)
+
+# Calculating the major 3rd (freq * 2^(4/12)) for each original frequency.
+
+[[sensors]] # sensor 1
+sensor_name = "input_1000"
+main_tone = 208.638
+[[sensors]] # sensor 2
+sensor_name = "input_1001"
+main_tone = 550.599
+[[sensors]] # sensor 3
+sensor_name = "input_1002"
+main_tone = 363.260
+[[sensors]] # sensor 4
+sensor_name = "input_1003"
+main_tone = 239.662
+[[sensors]] # sensor 5
+sensor_name = "input_1004"
+main_tone = 90.815
+[[sensors]] # sensor 6
+sensor_name = "input_1005"
+main_tone = 158.119
+[[sensors]] # sensor 7
+sensor_name = "input_1006"
+main_tone = 275.300
+[[sensors]] # sensor 8
+sensor_name = "input_1007"
+main_tone = 417.277
