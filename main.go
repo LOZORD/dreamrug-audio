@@ -29,14 +29,13 @@ var (
 	alsoLogDevices  = flag.Bool("alsologdevices", false, "If true, log devices that portaudio is aware of.")
 )
 
-// TODO: add  `inactiveLimit` to the main config. And any other remaining flags.
-
 type mainConfig struct {
 	input           io.Reader
 	audioBufferSize int
 	delayBufferSize int
 	configFilePath  string // TODO: make this an io.Reader as well.
 	baseVolume      float32
+	inactiveLimit   int
 	maxReading      int
 	alsoLogDevices  bool
 }
@@ -64,6 +63,7 @@ func main() {
 		delayBufferSize: *dataBufferSize,
 		configFilePath:  *configFile,
 		baseVolume:      float32(*baseVolume),
+		inactiveLimit:   *inactiveLimit,
 		maxReading:      *maxReading,
 		alsoLogDevices:  *alsoLogDevices,
 	}
@@ -160,7 +160,7 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 				log.V(2).InfoContextf(ctx, "got JSON payload: %s", bs)
 			}
 
-			if err := handlePayload(ctx, delayBuffers, pld, payloads); err != nil {
+			if err := handlePayload(ctx, delayBuffers, pld, payloads, mc.inactiveLimit); err != nil {
 				log.WarningContextf(ctx, "failed to handle payload: %v", err)
 				continue
 			}
@@ -190,7 +190,15 @@ func logDevices(ctx context.Context) error {
 
 const DELAY_BUFFER_AVERAGE_BIAS = 0
 
-func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld sensorPayload, payloads chan<- sensorPayload) error {
+// The amount to divide the signal by if it is below the configured inactive limit.
+const BELOW_INACTIVE_LIMIT_SHRINK_AMOUNT = 2.0
+
+func handlePayload(ctx context.Context,
+	delayBuffers map[string]*RingBuffer,
+	pld sensorPayload,
+	payloads chan<- sensorPayload,
+	inactiveLimit int,
+) error {
 	uptime := time.Duration(pld.UptimeMillis) * time.Millisecond
 	log.V(2).InfoContextf(ctx, "got payload at uptime %s: %+v", uptime.String(), pld)
 
@@ -219,8 +227,8 @@ func handlePayload(ctx context.Context, delayBuffers map[string]*RingBuffer, pld
 			continue
 		}
 		// If the average seems like the sensor is inactive, make it quieter.
-		if *inactiveLimit > 0 && avg < float64(*inactiveLimit) {
-			avg /= 2.0 // TODO: Should this 2.0 be a flag too?
+		if inactiveLimit > 0 && avg < float64(inactiveLimit) {
+			avg /= BELOW_INACTIVE_LIMIT_SHRINK_AMOUNT
 		}
 		avgReading := &sensorReading{
 			Name:  s.Name,
