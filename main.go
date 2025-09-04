@@ -23,26 +23,28 @@ import (
 
 // Flags.
 var (
-	dataBufferSize  = flag.Int("data_buffer_size", 0, "The size of the data buffer, for gradual input delay. Use 0 for no delay/buffering.")
-	audioBufferSize = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
-	configFile      = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
-	baseVolume      = flag.Float64("volume", 0.5, "The base volume.")
-	inactiveLimit   = flag.Int("inactive_limit", 0, "Cutoff for determining if a sensor is inactive.")
-	maxReading      = flag.Int("max_reading", (1024*4)-1, "The maximum vlaue that the Arduino can send.")
-	alsoLogDevices  = flag.Bool("alsologdevices", false, "If true, log devices that portaudio is aware of.")
-	outputWavFile   = flag.String("output_wav_file", "", "If set, write the audio output to this .wav file instead of playing audio.")
+	dataBufferSize    = flag.Int("data_buffer_size", 0, "The size of the data buffer, for gradual input delay. Use 0 for no delay/buffering.")
+	audioBufferSize   = flag.Int("audio_buffer_size", 512, "The size of the audio buffer, for Portaudio.")
+	configFile        = flag.String("io_config", "config.toml", "The TOML I/O configuration file.")
+	baseVolume        = flag.Float64("volume", 0.5, "The base volume.")
+	inactiveLimit     = flag.Int("inactive_limit", 0, "Cutoff for determining if a sensor is inactive.")
+	maxReading        = flag.Int("max_reading", (1024*4)-1, "The maximum vlaue that the Arduino can send.")
+	alsoLogDevices    = flag.Bool("alsologdevices", false, "If true, log devices that portaudio is aware of.")
+	outputWavFile     = flag.String("output_wav_file", "", "If set, write the audio output to this .wav file instead of playing audio.")
+	outputDeviceIndex = flag.Int("output_device", -1, "The index of the audio output device to use (from --alsologdevices). Leave unspecified to use the default device.")
 )
 
 type mainConfig struct {
-	input           io.Reader
-	audioBufferSize int
-	delayBufferSize int
-	ioConfig        *IOConfig
-	baseVolume      float32
-	inactiveLimit   int
-	maxReading      int
-	alsoLogDevices  bool
-	outputWavFile   string
+	input             io.Reader
+	audioBufferSize   int
+	delayBufferSize   int
+	ioConfig          *IOConfig
+	baseVolume        float32
+	inactiveLimit     int
+	maxReading        int
+	alsoLogDevices    bool
+	outputWavFile     string
+	outputDeviceIndex int
 }
 
 func main() {
@@ -60,7 +62,6 @@ func main() {
 	}()
 
 	log.Info("starting up and reading from stdin")
-	// TODO: log a warning if the user doesn't provide any data over stdin.
 
 	ioCfg, err := ParseIOConfigFromFile(*configFile)
 	if err != nil {
@@ -68,15 +69,16 @@ func main() {
 	}
 
 	cfg := &mainConfig{
-		input:           os.Stdin,
-		audioBufferSize: *audioBufferSize,
-		delayBufferSize: *dataBufferSize,
-		ioConfig:        ioCfg,
-		baseVolume:      float32(*baseVolume),
-		inactiveLimit:   *inactiveLimit,
-		maxReading:      *maxReading,
-		alsoLogDevices:  *alsoLogDevices,
-		outputWavFile:   *outputWavFile,
+		input:             os.Stdin,
+		audioBufferSize:   *audioBufferSize,
+		delayBufferSize:   *dataBufferSize,
+		ioConfig:          ioCfg,
+		baseVolume:        float32(*baseVolume),
+		inactiveLimit:     *inactiveLimit,
+		maxReading:        *maxReading,
+		alsoLogDevices:    *alsoLogDevices,
+		outputWavFile:     *outputWavFile,
+		outputDeviceIndex: *outputDeviceIndex,
 	}
 
 	if err := doMain(ctx, cfg); err != nil {
@@ -173,12 +175,14 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 		}
 	}()
 
+	// TODO: use a param struct for this function call.
 	runAudio(ctx,
 		inputToSines,
 		mc.audioBufferSize,
 		mc.baseVolume,
 		mc.maxReading,
 		mc.outputWavFile,
+		mc.outputDeviceIndex,
 		payloads,
 		sig)
 	return nil
@@ -251,22 +255,76 @@ const NUM_INPUT_CHANNELS = 0
 // https://dsp.stackexchange.com/q/17685
 const SAMPLE_RATE = 44100
 
-// runAudio acts as a simple dispatcher to either play audio out of speaker outputs to writing it to a file.
-func runAudio(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, outputWavFile string, payloads <-chan sensorPayload, sig chan os.Signal) {
+func runAudio(ctx context.Context,
+	sensorsToSines map[string]*Sine,
+	audioBufferSize int,
+	baseVolume float32,
+	maxReading int,
+	outputWavFile string,
+	outputDeviceIndex int,
+	payloads <-chan sensorPayload,
+	sig chan os.Signal) {
 	if outputWavFile != "" {
-		writeAudioToWav(ctx, sensorsToSines, audioBufferSize, baseVolume, maxReading, outputWavFile, payloads, sig)
+		writeAudioToWav(ctx,
+			sensorsToSines,
+			audioBufferSize,
+			baseVolume,
+			maxReading,
+			outputWavFile,
+			payloads,
+			sig)
 	} else {
-		playAudioLive(ctx, sensorsToSines, audioBufferSize, baseVolume, maxReading, payloads, sig)
+		playAudioLive(ctx,
+			sensorsToSines,
+			audioBufferSize,
+			baseVolume,
+			maxReading,
+			outputDeviceIndex,
+			payloads,
+			sig)
 	}
 }
 
-// playAudioLive contains the logic for playing audio to the default speaker device.
-func playAudioLive(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, payloads <-chan sensorPayload, sig chan os.Signal) {
-	log.V(2).InfoContext(ctx, "outputting to default audio device")
+// playAudioLive now accepts an outputDeviceIndex to select a specific audio device.
+func playAudioLive(ctx context.Context, sensorsToSines map[string]*Sine, audioBufferSize int, baseVolume float32, maxReading int, outputDeviceIndex int, payloads <-chan sensorPayload, sig chan os.Signal) {
 	out := make([]float32, audioBufferSize)
-	stream, err := portaudio.OpenDefaultStream(NUM_INPUT_CHANNELS, NUM_OUTPUT_CHANNELS, SAMPLE_RATE, len(out), &out)
+	var stream *portaudio.Stream
+	var err error
+	if outputDeviceIndex < 0 { // TODO: consider refactoring this into a `makeStream` function.
+		// Default behavior: open the default stream.
+		log.InfoContext(ctx, "Opening default audio device...")
+		stream, err = portaudio.OpenDefaultStream(NUM_INPUT_CHANNELS, NUM_OUTPUT_CHANNELS, SAMPLE_RATE, len(out), &out)
+	} else {
+		// New behavior: open a stream for the specified device index.
+		log.InfoContextf(ctx, "Attempting to open audio device with index %d...", outputDeviceIndex)
+		devices, errDevices := portaudio.Devices()
+		if errDevices != nil {
+			log.ExitContextf(ctx, "failed to get audio devices: %v", errDevices)
+		}
+		if outputDeviceIndex >= len(devices) {
+			log.ExitContextf(ctx, "invalid output device index %d; must be between 0 and %d", outputDeviceIndex, len(devices)-1)
+		}
+
+		device := devices[outputDeviceIndex]
+		log.InfoContextf(ctx, "Selected device: %s", device.Name)
+
+		streamParams := portaudio.StreamParameters{
+			// Note: this is an output-only stream, so no Input field is declared nor is an input buffer passed below.
+			Output: portaudio.StreamDeviceParameters{
+				Device:   device,
+				Channels: NUM_OUTPUT_CHANNELS,
+				Latency:  device.DefaultHighOutputLatency,
+			},
+			SampleRate:      SAMPLE_RATE,
+			FramesPerBuffer: len(out),
+		}
+		// Open a stream with no input and the specified output parameters.
+		stream, err = portaudio.OpenStream(streamParams, &out)
+	}
+
+	// Uniform error handling for both cases.
 	if err != nil {
-		log.Fatal(err)
+		log.Exitf("failed to open portaudio stream: %v", err)
 	}
 	defer func() {
 		log.InfoContext(ctx, "closing stream")
