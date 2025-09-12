@@ -93,6 +93,7 @@ type sensorReading struct {
 
 type sensorPayload struct {
 	UptimeMillis int64            `json:"upt"`
+	LocalIP      string           `json:"lip"`
 	SensorData   []*sensorReading `json:"sensorData"`
 }
 
@@ -156,6 +157,13 @@ func doMain(ctx context.Context, mc *mainConfig) error {
 			if txt == "" {
 				continue // Don't try to handle newlines from the Arduino.
 			}
+
+			// We really only expect JSON on the input.
+			// Allow the input to send debug payloads prefixed by `#`.
+			if strings.HasPrefix(txt, "#") {
+				continue
+			}
+
 			var pld sensorPayload
 			if err := json.Unmarshal([]byte(txt), &pld); err != nil {
 				log.V(2).InfoContextf(ctx, "failed to unmarshall content to sensorPayload (skipping): %q: %v", txt, err)
